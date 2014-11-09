@@ -17,11 +17,12 @@ function future() {
   var currentLine = (new Error()).stack.split('\n')[3];
   if (usage && currentLine.indexOf('<anonymous>') > -1) {
     var parts = currentLine.split(':');
-    var col = Math.max(0, parseInt(parts.pop(), 10) - 3)
+    var col = Math.max(0, parseInt(parts.pop(), 10) - 3);
     var line = parseInt(parts.pop(), 10) - 6;
 
 
     f._column = col;
+    f._line = line;
 
     if (!usage[line]) {
       usage[line] = [f];
@@ -40,7 +41,7 @@ function varargs(args) {
   return a;
 }
 
-function addShapeMethods(p) {
+function addShapeMethods(p, ee) {
   // bake shape methods onto the resulting future
   shapeMethods.forEach(function(method) {
     p[method.name] = function() {
@@ -55,11 +56,13 @@ function addShapeMethods(p) {
         });
       });
 
+      ee.emit('setErrorLocation', { line: s._line, column: s._column } );
+            
       // resolve immediately to avoid
       // bogging down the future pipeline
       s(null, { id: s._shapeId });
 
-      return addShapeMethods(s);
+      return addShapeMethods(s, ee);
     };
   });
 
@@ -76,7 +79,7 @@ function evalWrapper(fn, cb) {
 var shapeMethods = [];
 var realized = 0;
 
-function createClient(stream, fn) {
+function createClient(stream, fn, ee) {
 
   oce(stream, function(e, methods) {
     if (e) {
@@ -108,8 +111,8 @@ function createClient(stream, fn) {
             methods[method](resolvedArgs, p);
           });
 
-          return addShapeMethods(p);
-        }
+          return addShapeMethods(p, ee);
+        };
 
       } else if (system === 'prim') {
         commands[name] = function() {
@@ -122,7 +125,7 @@ function createClient(stream, fn) {
           // bogging down the future pipeline
           p(null, { id: p._shapeId });
 
-          return addShapeMethods(p);
+          return addShapeMethods(p, ee);
         };
       } else { // state, extract, export, etc..
         commands[name] = function(a) {
@@ -161,13 +164,15 @@ function createClient(stream, fn) {
                 //       to display() if a call does not exist (from AST)
                 console.warn(name, 'resulted in', r);
               }
-            }
+            };
           }
 
           var p = future();
           waitForArgs(args, function argumentsSatisfiedCallback(e, r) {
             if (e) {
-              return console.error('after waitForArgs', e);
+              ee.emit('setErrorMessage', e.message);
+              return;
+            //return console.error('after waitForArgs', e);
             }
 
             methods[method](r, p);
@@ -180,6 +185,6 @@ function createClient(stream, fn) {
       }
     });
 
-    fn(null, commands, evalWrapper);
+    fn(null, commands, evalWrapper, ee);
   });
 }

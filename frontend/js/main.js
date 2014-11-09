@@ -10,6 +10,8 @@ var addHelperMesh = threedee.addHelperMesh;
 var clearHelperMeshes = threedee.clearHelperMeshes;
 var createBrowserifyBundle = require('./browserify');
 
+var EventEmitter = require("events").EventEmitter;
+
 require('domready')(function() {
 
   var value = localStorage.getItem('text') || [
@@ -83,7 +85,11 @@ require('domready')(function() {
     });
 
     stream.once('data', function(uuid) {
-      createClient(stream, function(err, methods, wrapper) {
+      var ee = new EventEmitter();
+      var localLineNumber = 0;
+      var localColumnNumber = 0;
+
+      var clientFunc = function(err, methods, wrapper, ee) {
         var header = Object.keys(methods).map(function(name) {
           return 'var ' + name + ' = ' + 'ops.' + name + ';';
         });
@@ -92,7 +98,7 @@ require('domready')(function() {
         var _display = methods.display;
         methods.display = function() {
           typeof ga === 'function' && ga('send', 'event', 'net-oce', 'display', arguments.length);
-          var p = _display.apply(null, arguments)
+          var p = _display.apply(null, arguments);
           p(function(e, r) {
             if (e) {
               // TODO: show an error
@@ -104,10 +110,18 @@ require('domready')(function() {
           return p;
         };
 
+        methods.error = function (lineNumber, column, message) {
+          jse.errorLines.push( {
+            lineNumber: lineNumber,
+            column: column,
+            message: message
+          } );
+          jse.editor.addLineClass(lineNumber, 'background', 'errorLine');
+          appendErrorLines();
+        };
+
         function appendErrorLines() {
-
           if (jse.errorLines) {
-
             var els = qel('.errorLine', null, true);
 
             jse.errorLines.forEach(function(err, idx) {
@@ -136,7 +150,7 @@ require('domready')(function() {
                 var length = 1;
                 if (message.toLowerCase().indexOf('unexpected token') > -1) {
 
-                  var message = message.replace(/unexpected token/i, '').trim();
+                  message = message.replace(/unexpected token/i, '').trim();
                   if (message !== 'ILLEGAL') {
                     length = message.length;
                   }
@@ -153,11 +167,19 @@ require('domready')(function() {
                 );
 
                 jse.marks.push(mark);
-
               }
             });
           }
         }
+
+        ee.on("setErrorMessage", function (errorMessage) {
+          methods.error(localLineNumber, localColumnNumber, errorMessage);
+        });
+
+        ee.on('setErrorLocation', function (errorLocationInfo) {
+          localLineNumber = errorLocationInfo.line;
+          localColumnNumber = errorLocationInfo.column;
+        });
 
         var evilMethodUsage;
 
@@ -183,7 +205,7 @@ require('domready')(function() {
                 message: e.message,
                 column: parseInt(matches[2])
               });
-              jse.editor.addLineClass(lineNumber, 'background', 'errorLine' )
+              jse.editor.addLineClass(lineNumber, 'background', 'errorLine');
             }
 
             appendErrorLines();
@@ -253,21 +275,23 @@ require('domready')(function() {
 
                 var evilLine = evilMethodUsage[line];
 
+                var someFunc = function(e, r) { // done to clear jshint warning
+                  if (!future._displayFuture) {
+                    typeof ga === 'function' && ga('send', 'event', 'shape', 'hover', arguments.length);
+                    future._displayFuture = _display(r);
+                  }
+
+                  // TODO: Allow more than one mesh to be rendered.
+                  future._displayFuture(addHelperMesh);
+                };
+
                 // match with the text
                 for (var i=0; i<evilLine.length; i++) {
 
                   if (Math.abs(evilLine[i]._column - col) <= 2) {
                     var future = evilLine[i];
 
-                    future(function(e, r) {
-                      if (!future._displayFuture) {
-                        typeof ga === 'function' && ga('send', 'event', 'shape', 'hover', arguments.length);
-                        future._displayFuture = _display(r);
-                      }
-
-                      // TODO: Allow more than one mesh to be rendered.
-                      future._displayFuture(addHelperMesh);
-                    });
+                    future(someFunc);
                   }
                 }
               }
@@ -279,7 +303,6 @@ require('domready')(function() {
 
           // TODO: consider allowing hover of lines
           // TODO: consider hover of loops
-
         });
 
         jse.on('valid', function(valid, ast) {
@@ -309,7 +332,7 @@ require('domready')(function() {
                       message: "'" + e.module + "' not found",
                     });
 
-                    jse.editor.addLineClass(line, 'background', 'errorLine' )
+                    jse.editor.addLineClass(line, 'background', 'errorLine');
                   }
                 });
                 appendErrorLines();
@@ -317,16 +340,18 @@ require('domready')(function() {
               }
 
               methods.reset(function() {
-                evil(text, require)
+                evil(text, require);
               });
-            })
+            });
           } else {
             appendErrorLines();
           }
         });
 
         window.methods = methods;
-      });
+      };
+
+      createClient(stream, clientFunc, ee);
     });
   });
 });
